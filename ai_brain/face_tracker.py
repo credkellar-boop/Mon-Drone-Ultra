@@ -2,8 +2,9 @@ import asyncio
 import cv2
 import face_recognition
 from google import genai
+from google.genai import types
 from mavsdk import System
-from mavsdk.offboard import VelocityBodyYawspeed
+from mavsdk.offboard import VelocityBodyYawspeed, OffboardError
 
 class MonDroneTracker:
     def __init__(self):
@@ -11,12 +12,11 @@ class MonDroneTracker:
         self.ai_client = genai.Client()
         self.drone = System()
         
-        # 2. Mock database of authorized faces for Mon-Drone-Ultra
-        # In production, replace with paths to pictures of yourself
+        # 2. Mock database of authorized faces
         self.known_face_encodings = []
         self.known_face_names = ["Master Operator"]
         
-        # Target resolution metrics for error calculation
+        # Target resolution metrics
         self.FRAME_WIDTH = 640
         self.FRAME_HEIGHT = 480
         self.CENTER_X = self.FRAME_WIDTH // 2
@@ -30,10 +30,9 @@ class MonDroneTracker:
                 break
 
     async def trigger_gemini_alert(self, unknown_frame):
-        """Dispatches an alert image to Gemini if an intruder intercepts tracking."""
+        """Dispatches an alert image to Gemini if an intruder is detected."""
         print("[AI-BRAIN] Intruder detected! Dispatching frames to Gemini...")
         
-        # Convert OpenCV image matrix to bytes for the new GenAI SDK
         _, buffer = cv2.imencode('.jpg', unknown_frame)
         image_bytes = buffer.tobytes()
         
@@ -49,16 +48,18 @@ class MonDroneTracker:
         print(f"\n--- [GEMINI SECURITY VERDICT] ---\n{response.text}\n---------------------------------\n")
 
     async def tracking_loop(self):
-        # Open video capture stream (0 = system default webcam, or virtual camera pipeline for SITL)
         video_capture = cv2.VideoCapture(0)
         video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.FRAME_WIDTH)
         video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.FRAME_HEIGHT)
 
         print("[TRACKER] Active. Initializing target acquisition sequence...")
         
-        # Setup offboard setpoint baseline
         await self.drone.offboard.set_velocity_body_yawspeed(VelocityBodyYawspeed(0.0, 0.0, 0.0, 0.0))
-        await self.drone.offboard.start()
+        try:
+            await self.drone.offboard.start()
+        except OffboardError as e:
+            print(f"[ERROR] Offboard start failed: {e}")
+            return
 
         try:
             while True:
@@ -67,10 +68,7 @@ class MonDroneTracker:
                     await asyncio.sleep(0.01)
                     continue
 
-                # Convert from BGR (OpenCV standard) to RGB (face_recognition standard)
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # Locate all faces inside the current spatial array
                 face_locations = face_recognition.face_locations(rgb_frame)
                 face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
 
@@ -78,23 +76,19 @@ class MonDroneTracker:
                 forward_velocity = 0.0
 
                 for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
-                    # Calculate tracking center offset ($X$ coordinate error calculation)
+                    # Tracking Logic: P-Controller
                     face_center_x = (left + right) // 2
                     pixel_error_x = face_center_x - self.CENTER_X
-                    
-                    # Basic P-Controller tracking loop (proportional tracking constant = 0.15)
                     yaw_speed = float(pixel_error_x * 0.15)
-                    # Limit raw turn speeds to a safe maximum of 30 deg/s
                     yaw_speed = max(min(yaw_speed, 30.0), -30.0)
                     
-                    # Calculate depth proxy based on pixel distance bounding box size
+                    # Depth approximation
                     face_height = bottom - top
                     if face_height < 100:
-                        forward_velocity = 0.5  # Move closer if target is too small in frame
+                        forward_velocity = 0.5 
                     elif face_height > 180:
-                        forward_velocity = -0.5 # Move back if target is uncomfortably close
+                        forward_velocity = -0.5
                     
-                    # Identify Face against database profiles
                     matches = face_recognition.compare_faces(self.known_face_encodings, face_encoding)
                     name = "UNKNOWN INTRUDER"
 
@@ -102,26 +96,20 @@ class MonDroneTracker:
                         first_match_index = matches.index(True)
                         name = self.known_face_names[first_match_index]
                     else:
-                        # Anomaly spotted: Spawn off a background thread task to run Gemini vision checks 
-                        # without freezing up the main drone motor navigation cycle.
                         asyncio.create_task(self.trigger_gemini_alert(frame.copy()))
 
-                    # Visual HUD feedback overlays 
                     cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
                     cv2.putText(frame, name, (left + 6, bottom - 6), cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1)
 
-                # Feed real-time tracking error transformations directly into the MAVLink flight dynamic array
-                print(f"[FLIGHT COMPUTE] Applying Offboard adjustments: Yaw Speed: {yaw_speed:.2f}°/s | Forward: {forward_velocity} m/s")
                 await self.drone.offboard.set_velocity_body_yawspeed(
                     VelocityBodyYawspeed(forward_velocity, 0.0, 0.0, yaw_speed)
                 )
 
-                # Render the diagnostic console feed locally
                 cv2.imshow('Mon-Drone-Ultra HUD', frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
 
-                await asyncio.sleep(0.03) # Throttle to roughly ~30 FPS tracking update speed
+                await asyncio.sleep(0.03)
 
         finally:
             video_capture.release()
