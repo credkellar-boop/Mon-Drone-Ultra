@@ -107,3 +107,16 @@ async def monitor_power(drone):
         await set_projector_state(OFF)
         await fly_to_home()
         
+# Updated Gemini System Prompt in agent.py
+async def get_gemini_prompt(situation_brief, context):
+    return f"""
+    You are the central brain of Mon-Drone-Ultra.
+    Current Date/Time: {context['timestamp']}
+    Current Weather Conditions: {context['weather']}
+    
+    Current Mission Situation: {situation_brief}
+    
+    If the weather is unsafe (e.g., high wind, rain), prioritize immediate safety.
+    Respond with flight vectors...
+    """
+    
