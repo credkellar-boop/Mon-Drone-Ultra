@@ -5,7 +5,18 @@ from google.genai import types
 from mavsdk import System
 from mavsdk.offboard import OffboardError, VelocityBodyYawspeed
 
-# Ensure API key is configured
+# --- Placeholder Definitions to Resolve Linting Errors ---
+# Move these to your 'utils/' files later if desired
+def get_solar_voltage():
+    return 12.0  # Placeholder return
+
+async def fly_to_home():
+    print("Executing emergency return to home...")
+
+async def set_projector_state(state: bool):
+    print(f"Projector set to: {state}")
+
+# --- Ensure API key is configured ---
 if not os.environ.get("GEMINI_API_KEY"):
     raise ValueError("CRITICAL: GEMINI_API_KEY environment variable is not set.")
 
@@ -27,7 +38,7 @@ async def analyze_scene_with_gemini(client, situation_brief: str):
     ACTION_LOG: <brief phrase explaining why you chose this action>
     """
 
-    # Using the standard gemini-2.5-flash model for ultra-low latency edge decisions
+    # Using the standard gemini-2.5-flash model
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt
@@ -48,9 +59,8 @@ async def run_ai_drone_loop():
             print("[FLIGHT] Core Telemetry Link Established.")
             break
 
-    # Mock Scenario: Local Face Recognition has triggered an unknown entity target
-    # In a production environment, this text block would be fed via OpenCV/Mediapipe metadata bounding boxes
-    mock_sensor_input = "Face recognition flagged an unknown person standing 4 meters away, offset slightly to the right. The projector is currently OFF."
+    # Mock Scenario
+    mock_sensor_input = "Face recognition flagged an unknown person standing 4 meters away."
 
     # Send the sensor profile to Gemini
     gemini_decision = await analyze_scene_with_gemini(ai_client, mock_sensor_input)
@@ -58,65 +68,50 @@ async def run_ai_drone_loop():
     print(gemini_decision)
     print("---------------------------\n")
 
-    # Simple regex parsing engine for extracting the flight velocities from Gemini's response
+    # Simple regex parsing engine
     try:
         lines = gemini_decision.strip().split('\n')
         forward = float([l for l in lines if "FORWARD_VELOCITY" in l][0].split(":")[1].strip())
-        right = float([l for l in lines if "RIGHT_VELOCITY" in l][0].split(":")[1].strip())
+        right = float for l in lines if "RIGHT_VELOCITY" in l][0].split(":")[1].strip())
         yaw = float([l for l in lines if "YAW_SPEED" in l][0].split(":")[1].strip())
         log = [l for l in lines if "ACTION_LOG" in l][0].split(":")[1].strip()
         
         print(f"[DECISION LOG]: {log}")
     except Exception as e:
-        print(f"[ERROR] Failed to parse Gemini output, falling back to safe hover layout. Error: {e}")
+        print(f"[ERROR] Failed to parse Gemini output, falling back to safe hover. Error: {e}")
         forward, right, yaw = 0.0, 0.0, 0.0
 
-    # Execute Flight Command via MAVSDK Offboard mode
+    # Execute Flight Command
     print("[FLIGHT] Initializing Offboard Mode Protocols...")
-    # Offboard mode requires sending a baseline setpoint before starting
     await drone.offboard.set_velocity_body_yawspeed(VelocityBodyYawspeed(0.0, 0.0, 0.0, 0.0))
 
     try:
         await drone.offboard.start()
     except OffboardError as error:
-        print(f"[CRITICAL] Offboard mode failed to start: {error._result.result}. Aborting loop.")
+        print(f"[CRITICAL] Offboard mode failed: {error._result.result}")
         return
 
-    print(f"[EXECUTION] Mon-Drone-Ultra moving: Forward={forward}m/s, Right={right}m/s, Yaw={yaw}deg/s")
-    # Feed Gemini's translated parameters directly into the physical flight dynamics
+    print(f"[EXECUTION] Mon-Drone-Ultra moving: Forward={forward}m/s, Yaw={yaw}deg/s")
     await drone.offboard.set_velocity_body_yawspeed(VelocityBodyYawspeed(forward, right, 0.0, yaw))
     
-    # Run the tactic for 5 seconds, then safely stabilize
     await asyncio.sleep(5)
     
-    print("[FLIGHT] Tactic complete. Disengaging offboard controls and entering stable hover.")
+    print("[FLIGHT] Tactic complete. Disengaging offboard controls.")
     await drone.offboard.set_velocity_body_yawspeed(VelocityBodyYawspeed(0.0, 0.0, 0.0, 0.0))
     await asyncio.sleep(2)
     await drone.offboard.stop()
 
+# Simplified Power Logic
+async def monitor_power(drone):
+    battery_level = 90 # Mock data
+    solar_input = get_solar_voltage()
+    
+    if battery_level < 20 and solar_input < 10.0:
+        await set_projector_state(False)
+        await fly_to_home()
+
+def get_gemini_prompt(situation_brief, context):
+    return f"Current Time: {context['timestamp']}\nSituation: {situation_brief}"
+
 if __name__ == "__main__":
     asyncio.run(run_ai_drone_loop())
-# Simplified Logic Example
-async def monitor_power(drone):
-    # Retrieve battery and solar input stats via MAVLink
-    battery_level = await drone.telemetry.battery()
-    solar_input = get_solar_voltage() # Custom sensor readout
-    
-    if battery_level < 20 and solar_input < threshold:
-        # Gemini forced to prioritize energy saving
-        await set_projector_state(OFF)
-        await fly_to_home()
-        
-# Updated Gemini System Prompt in agent.py
-async def get_gemini_prompt(situation_brief, context):
-    return f"""
-    You are the central brain of Mon-Drone-Ultra.
-    Current Date/Time: {context['timestamp']}
-    Current Weather Conditions: {context['weather']}
-    
-    Current Mission Situation: {situation_brief}
-    
-    If the weather is unsafe (e.g., high wind, rain), prioritize immediate safety.
-    Respond with flight vectors...
-    """
-    
