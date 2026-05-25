@@ -1,0 +1,42 @@
+name: Mon-Drone-Ultra CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake libopenblas-dev liblapack-dev libjpeg-dev libx11-dev libgtk-3-dev
+        # Required for OpenCV and Face Recognition
+        
+    - name: Install Python Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install mavsdk google-genai opencv-python face-recognition streamlit pytest flake8
+
+    - name: Linting (Code Quality)
+      run: |
+        # Ensure code follows standards and isn't broken
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+    - name: Run Unit Tests
+      run: |
+        # Run your test suite. 
+        # Create a 'tests' folder in your root directory to store logic tests.
+        pytest tests/
